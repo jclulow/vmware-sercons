@@ -72,10 +72,12 @@ typedef struct copy_args {
 	int ca_fd_src_is_terminal;
 	int ca_fd_dst;
 
+	int ca_fd_logfile;
+
 	char ca_escape_char;
 } copy_args_t;
 
-void *
+static void *
 copy_thread(void *arg)
 {
 	char c1 = '\0', c2 = '\0';
@@ -100,6 +102,14 @@ copy_thread(void *arg)
 
 		if ((sz = write(ca->ca_fd_dst, &c, 1)) != 1) {
 			return (post_end(ER_ERROR));
+		}
+
+		/*
+		 * Write log file if we have one:
+		 */
+		if (ca->ca_fd_logfile != -1) {
+			(void) write(ca->ca_fd_logfile, &c, 1);
+			(void) fsync(ca->ca_fd_logfile);
 		}
 
 		if (ca->ca_escape_char == '\0')
@@ -161,7 +171,7 @@ raw_mode(int term_fd)
 	return (0);
 }
 
-int
+static int
 make_conn(const char *path)
 {
 	int fd;
@@ -186,26 +196,81 @@ make_conn(const char *path)
 	return (fd);
 }
 
+static int
+open_logfile(const char *path)
+{
+	const char *msg = "\n * log file opened\n\n";
+	int logfd;
+
+	logfd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+	if (logfd == -1) {
+		perror("opening log file");
+		exit(1);
+	}
+	(void) write(logfd, msg, strlen(msg));
+	(void) fsync(logfd);
+
+	return (logfd);
+}
+
 int
 main(int argc, char **argv)
 {
 	copy_args_t ca_a, ca_b;
 	pthread_t thr_a, thr_b;
-	int connfd = -1, termfd;
-	end_reason_t reason;
+	int connfd = -1, termfd, logfd = -1;
+	end_reason_t reason = ER_ERROR;
+	int c, errflg = 0, Wflag = 0;
+	char *logpath = NULL, *sockpath = NULL;
 
-	if (argc < 2) {
-		fprintf(stderr, "Usage: %s <socket_path>\n", argv[0]);
+	while ((c = getopt(argc, argv, ":l:W")) != -1) {
+		switch (c) {
+		case 'l':
+			/*
+			 * -l <log_file>
+			 * Write all data received through the serial pipe
+			 * (i.e. from the "remote" virtual guest) into this
+			 * log file.  Log file is opened for append.
+			 */
+			logpath = optarg;
+			break;
+		case 'W':
+			/*
+			 * -W
+			 * Disable the default behaviour, which is to keep
+			 * trying to connect until the socket becomes available.
+			 */
+			Wflag++;
+			break;
+		case ':':
+			fprintf(stderr, "Option -%c requires an operand\n",
+			    optopt);
+			errflg++;
+			break;
+		case '?':
+			fprintf(stderr, "Unrecognized option: -%c\n", optopt);
+			errflg++;
+			break;
+		}
+	}
+
+	if (errflg != 0 || optind >= argc) {
+		fprintf(stderr, "Usage: %s [-W] [-l <log_file>] <socket_path>\n",
+		    argv[0]);
 		exit(1);
 	}
+	sockpath = argv[optind];
+
+	if (logpath != NULL)
+		logfd = open_logfile(logpath);
 
 	while (connfd == -1) {
 		static int firstloop = 1;
-		if ((connfd = make_conn(argv[1])) == -1) {
-			if (errno == ENOENT || errno == EACCES ||
-			    errno == EPERM || errno == ECONNREFUSED) {
+		if ((connfd = make_conn(sockpath)) == -1) {
+			if (Wflag == 0 && (errno == ENOENT || errno == EACCES ||
+			    errno == EPERM || errno == ECONNREFUSED)) {
 				fprintf(stderr, firstloop ? " * Waiting for "
-				    "socket..." : ".");
+				    "socket (%s)..." : ".", sockpath);
 				fflush(stderr);
 				sleep(1);
 			} else {
@@ -234,6 +299,7 @@ main(int argc, char **argv)
 	ca_a.ca_fd_src = termfd;
 	ca_a.ca_fd_src_is_terminal = 1;
 	ca_a.ca_fd_dst = connfd;
+	ca_a.ca_fd_logfile = -1;
 	ca_a.ca_escape_char = '#';
 	if (pthread_create(&thr_a, NULL, copy_thread, &ca_a) != 0)
 		goto out;
@@ -244,6 +310,7 @@ main(int argc, char **argv)
 	ca_b.ca_fd_src = connfd;
 	ca_b.ca_fd_src_is_terminal = 0;
 	ca_b.ca_fd_dst = termfd;
+	ca_b.ca_fd_logfile = logfd;
 	ca_b.ca_escape_char = '\0';
 	if (pthread_create(&thr_b, NULL, copy_thread, &ca_b) != 0)
 		goto out;
@@ -267,7 +334,7 @@ out:
 		break;
 	case ER_EOF:
 		fprintf(stderr, "\n * EOF on read.\n");
-		exit(1);
+		exit(50);
 		break;
 	default:
 		abort();
