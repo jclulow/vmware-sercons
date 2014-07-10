@@ -12,6 +12,12 @@
 #include <strings.h>
 #include <pthread.h>
 
+#define	ERRNO_NON_FATAL(en)		\
+	((en) == ENOENT || 		\
+	(en) == EACCES || 		\
+	(en) == EPERM || 		\
+	(en) == ECONNREFUSED)
+
 typedef enum end_reason {
 	ER_NONE = 0,
 	ER_ESCAPE_CHAR = 1,
@@ -267,16 +273,19 @@ main(int argc, char **argv)
 	while (connfd == -1) {
 		static int firstloop = 1;
 		if ((connfd = make_conn(sockpath)) == -1) {
-			if (Wflag == 0 && (errno == ENOENT || errno == EACCES ||
-			    errno == EPERM || errno == ECONNREFUSED)) {
-				fprintf(stderr, firstloop ? " * Waiting for "
-				    "socket (%s)..." : ".", sockpath);
-				fflush(stderr);
-				sleep(1);
-			} else {
+			if (Wflag || !ERRNO_NON_FATAL(errno)) {
 				perror("opening serial socket");
 				exit(1);
 			}
+
+			if (firstloop) {
+				fprintf(stderr, " * Waiting for "
+				    "socket (%s)...", sockpath);
+			} else {
+				fprintf(stderr, ".");
+			}
+			fflush(stderr);
+			sleep(1);
 		}
 		firstloop = 0;
 	}
