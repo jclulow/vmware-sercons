@@ -6,6 +6,10 @@ ifeq ($(OS),Darwin)
 CFLAGS += -m32
 CFLAGS += -mmacosx-version-min=10.6
 endif
+ifeq ($(OS),SunOS)
+CFLAGS += -m32
+CFLAGS += -lnsl -lsocket
+endif
 
 PROG = sercons
 

@@ -180,26 +180,40 @@ raw_mode(int term_fd)
 static int
 make_conn(const char *path)
 {
-	int fd;
-	struct sockaddr_un ua;
+	int ret = -1;
+	int fd = -1;
+	struct sockaddr_un *ua;
+	int e = 0;
 
-	if (strlen(path) > sizeof (ua.sun_path) - 1)
-		return (-1);
+	/*
+	 * The "sun_path" member of a "sockaddr_un" is generally on the order
+	 * of 100 bytes long, but is also at the end of the struct on most
+	 * platforms.  In order to support longer path names, we allocate space
+	 * for the object on the heap, with extra trailing bytes into which the
+	 * longer path can extend.
+	 */
+	if ((ua = calloc(1, sizeof (*ua) + strlen(path) + 1)) == NULL) {
+		e = errno;
+		goto out;
+	}
+	ua->sun_family = AF_UNIX;
+	strcpy(ua->sun_path, path);
 
-	if ((fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
-		return (-1);
-
-	bzero(&ua, sizeof (ua));
-	ua.sun_family = AF_UNIX;
-	ua.sun_len = sizeof (ua);
-	strcpy(ua.sun_path, path);
-
-	if (connect(fd, (struct sockaddr *)&ua, ua.sun_len) == -1) {
-		(void) close(fd);
-		return (-1);
+	if ((fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1 ||
+	    connect(fd, (struct sockaddr *)ua, SUN_LEN(ua)) == -1) {
+		e = errno;
+		goto out;
 	}
 
-	return (fd);
+	ret = fd;
+
+out:
+	free(ua);
+	if (ret == -1 && fd != -1) {
+		(void) close(fd);
+	}
+	errno = e;
+	return (ret);
 }
 
 static int
