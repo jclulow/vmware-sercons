@@ -304,7 +304,7 @@ main(int argc, char **argv)
 		firstloop = 0;
 	}
 
-	fprintf(stderr, "\n * Connected.  Escape sequence is <CR>#.\n");
+	fprintf(stderr, "\n * Connected.  Escape sequence is <Enter>#.\n");
 
 	if ((termfd = open("/dev/tty", O_RDWR | O_NOCTTY)) == -1) {
 		perror("opening controlling terminal");
